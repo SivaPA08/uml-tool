@@ -1,5 +1,7 @@
+// App.jsx
 import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
+import html2canvas from 'html2canvas';
 
 import Eclipse   from './Eclipse';
 import Rectangle from './Rectangle';
@@ -7,7 +9,6 @@ import Line      from './Line';
 
 let nextId = 1;
 
-// === Inline styles for your layout (was App.css) ===
 const styles = {
   main: {
     display: 'grid',
@@ -26,7 +27,7 @@ const styles = {
     backgroundColor: '#129e2b',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-around',
     color: 'white',
   },
   sidebar: {
@@ -60,24 +61,37 @@ const styles = {
 };
 
 export default function App() {
-  const [items, setItems] = useState([]);
-  const boardRef = useRef(null);
-  const dragging = useRef(null);
+  const [items, setItems]   = useState([]);
+  const [past,   setPast]   = useState([]);
+  const [future, setFuture] = useState([]);
 
-  // Marquee selection state
-  const [selecting, setSelecting] = useState(false);
-  const [marquee, setMarquee] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const boardRef   = useRef(null);
+  const dragging   = useRef(null);
   const marqueeStart = useRef({ x: 0, y: 0 });
 
-  // Add a new shape to the board
+  const [selecting, setSelecting] = useState(false);
+  const [marquee, setMarquee]     = useState({ x: 0, y: 0, width: 0, height: 0 });
+
+  // History helpers
+  function pushHistory() {
+    setPast(p => [...p, items]);
+    setFuture([]);
+  }
+  function updateItems(fnOrArray) {
+    pushHistory();
+    setItems(prev =>
+      typeof fnOrArray === 'function' ? fnOrArray(prev) : fnOrArray
+    );
+  }
+
+  // Add a new shape
   function addShape(ShapeComponent = Eclipse) {
-    const board = boardRef.current;
-    if (!board) return;
-    const rect = board.getBoundingClientRect();
+    if (!boardRef.current) return;
+    const rect = boardRef.current.getBoundingClientRect();
     const size = 50;
-    const x = rect.width / 2 - size / 2;
+    const x = rect.width  / 2 - size / 2;
     const y = rect.height / 2 - size / 2;
-    setItems(prev => [
+    updateItems(prev => [
       ...prev,
       { id: nextId++, x, y, selected: false, Shape: ShapeComponent }
     ]);
@@ -85,16 +99,48 @@ export default function App() {
 
   // Delete key handler
   useEffect(() => {
-    const onKeyDown = e => {
+    const onKey = e => {
       if (e.key === 'Delete') {
-        setItems(prev => prev.filter(item => !item.selected));
+        updateItems(prev => prev.filter(it => !it.selected));
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Drag & marquee logic
+  // Clear all shapes
+  function clearAll() {
+    updateItems([]);
+  }
+
+  // Undo / Redo
+  function undo() {
+    if (!past.length) return;
+    const previous = past[past.length - 1];
+    setFuture(f => [items, ...f]);
+    setPast(p => p.slice(0, -1));
+    setItems(previous);
+  }
+  function redo() {
+    if (!future.length) return;
+    const next = future[0];
+    setPast(p => [...p, items]);
+    setFuture(f => f.slice(1));
+    setItems(next);
+  }
+
+  // Save board as image
+  function saveImage() {
+    if (!boardRef.current) return;
+    html2canvas(boardRef.current).then(canvas => {
+      const link = document.createElement('a');
+      link.download = 'board.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    });
+  }
+
+  // Drag and marquee logic
   useEffect(() => {
     function onMouseMove(e) {
       if (dragging.current) {
@@ -104,9 +150,7 @@ export default function App() {
         let y = e.clientY - br.top  - offsetY;
         x = Math.max(0, Math.min(br.width - 50, x));
         y = Math.max(0, Math.min(br.height - 50, y));
-        setItems(prev =>
-          prev.map(it => it.id === id ? { ...it, x, y } : it)
-        );
+        setItems(prev => prev.map(it => it.id === id ? { ...it, x, y } : it));
       } else if (selecting) {
         const br = boardRef.current.getBoundingClientRect();
         const curX = e.clientX - br.left;
@@ -120,26 +164,22 @@ export default function App() {
         });
       }
     }
-
     function onMouseUp() {
       if (selecting) {
-        setItems(prev =>
-          prev.map(it => {
-            const overlap = !(
-              it.x > marquee.x + marquee.width ||
-              it.x + 50 < marquee.x ||
-              it.y > marquee.y + marquee.height ||
-              it.y + 50 < marquee.y
-            );
-            return { ...it, selected: overlap };
-          })
-        );
+        setItems(prev => prev.map(it => {
+          const overlap = !(
+            it.x > marquee.x + marquee.width ||
+            it.x + 50 < marquee.x ||
+            it.y > marquee.y + marquee.height ||
+            it.y + 50 < marquee.y
+          );
+          return { ...it, selected: overlap };
+        }));
         setSelecting(false);
-        setMarquee({ x:0, y:0, width:0, height:0 });
+        setMarquee({ x: 0, y: 0, width: 0, height: 0 });
       }
       dragging.current = null;
     }
-
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup',   onMouseUp);
     return () => {
@@ -172,12 +212,19 @@ export default function App() {
 
   return (
     <div style={styles.main}>
-      <div style={styles.header}>Drag & Select Demo</div>
+      <div style={styles.header}>
+        <button onClick={saveImage}>Save Image</button>
+        <button onClick={undo}      disabled={!past.length}>Undo</button>
+        <button onClick={redo}      disabled={!future.length}>Redo</button>
+        <button onClick={clearAll}> Clear All</button>
+      </div>
+
       <div style={styles.sidebar}>
         <button onClick={() => addShape(Eclipse)}>Add Eclipse</button>
         <button onClick={() => addShape(Rectangle)}>Add Rectangle</button>
         <button onClick={() => addShape(Line)}>Add Line</button>
       </div>
+
       <div
         style={styles.board}
         ref={boardRef}
@@ -202,16 +249,19 @@ export default function App() {
               left:   marquee.x,
               top:    marquee.y,
               width:  marquee.width,
-              height: marquee.height
+              height: marquee.height,
             }}
           />
         )}
       </div>
-      <div style={styles.footer}>Press “Delete” to remove selected</div>
+
+      <div style={styles.footer}>
+        Press “Delete” to remove selected
+      </div>
     </div>
   );
 }
 
-// Render
+// Render into #root
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
